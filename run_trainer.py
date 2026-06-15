@@ -844,10 +844,10 @@ def main():
         description="Pythonic training script launcher for long-term-mem",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-    Examples (see RUNS_HALO.md for full HALO finals commands):
+    Examples:
 
     # Dry run (washandreturn)
-    python run_trainer.py -ds 8 -bs 8 -ng 1 -mc libero_1_5x_small.json -dc task_robocasa_mem_washandreturn.json -s 1 -sl 512 -ll local --dry-run
+    python run_trainer.py -ds 8 -bs 8 -ng 1 --task washandreturn -ll local --dry-run
     """
     )
 

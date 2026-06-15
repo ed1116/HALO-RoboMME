@@ -186,6 +186,7 @@ slurm_eval_dumps2/*
 slurm_eval_dumps/*
 slurm_eval_dumps2/*
 *png
+!assets/**/*.png
 batched_vqa/*
 flow-test/*
 plotters/images/*

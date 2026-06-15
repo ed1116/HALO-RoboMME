@@ -1,4 +1,4 @@
-"""Per-task config classes mirroring the HALO finals commands in docs/audit/RUNS_HALO.md.
+"""Per-task config classes mirroring the HALO finals training commands.
 
 Each task config captures the exact arguments used for that task. Building a config produces a
 ``TrainingConfig`` (from ``run_trainer.py``) ready to be launched, and ``cli_argv()`` regenerates
@@ -15,7 +15,7 @@ from typing import ClassVar, Dict, List, Type
 class HaloFinalsBaseConfig:
     """Shared HALO finals settings.
 
-    Defaults match the arguments common to all four task commands in RUNS_HALO.md:
+    Defaults match the arguments common to all four task commands:
     ``-ds 8 -bs 8 -ng 1 -mc libero_1_5x_small.json -nw 20 -s 1 -ll local -bai 1 3 4 5 -rai 0 2
     -gptss -ss-mode bbox_str --compile-model -br 50 --max-ss-size 16 --temp`` plus
     ``--exp-base-dir halo_finals --wandb-project-name tokenized_input``.
@@ -49,7 +49,7 @@ class HaloFinalsBaseConfig:
     compile_model: bool = True
     break_after_n_epochs: int = 50
 
-    # All four RUNS_HALO commands pass --temp, which inside run_trainer.py overrides
+    # All four finals commands pass --temp, which inside run_trainer.py overrides
     # exp_base_dir → "temp" and wandb_project_name → "temp". The explicit values below
     # are kept for ``cli_argv()`` parity with the original commands; set ``temp=False``
     # to actually write to ``halo_finals`` / ``tokenized_input``.
@@ -134,7 +134,7 @@ class RetrieveOilConfig(HaloFinalsBaseConfig):
         "qa_configs/qa_robocasa_mem_retrieve_oil_relevant_objs_gptstate.json",
     ])
     seq_length: int = 512
-    # Note: the RUNS_HALO command for retrieve_oil omits -ss-coeff, so it uses the default 1.0.
+    # Note: the retrieve_oil command omits -ss-coeff, so it uses the default 1.0.
     coeff_state_supervision_loss: float = 1.0
 
 
