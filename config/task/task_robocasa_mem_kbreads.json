@@ -1,0 +1,13 @@
+{
+    "dataset_path": [
+        "memory/MemPutKBreadInMicrowave/2025-07-25-10-40-55/demo_im128_notp.hdf5",
+        "memory/MemPutKBreadInMicrowave/2025-07-25-13-25-05/demo_im128_notp.hdf5",
+        "memory/MemPutKBreadInMicrowave/2025-07-25-14-50-59/demo_im128_notp.hdf5"
+    ],
+    "image_keys": ["obs/robot0_agentview_center_image", "obs/robot0_eye_in_hand_image"],
+    "max_traj_len": 1024,
+    "low_dim_keys": [],
+    "group_method": "dinov2",
+    "proprio_keys": ["obs/robot0_joint_pos_cos", "obs/robot0_gripper_qpos"],
+    "action_keys": ["actions"] 
+}

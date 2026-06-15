@@ -1,0 +1,14 @@
+{
+    "json_files": [
+        "memory/MemRetrieveOilsFromCounterLL/2025-09-20-22-49-27/generated_qa/qa.json",
+        "memory/MemRetrieveOilsFromCounterLR/2025-09-20-23-25-19/generated_qa/qa.json",
+        "memory/MemRetrieveOilsFromCounterRL/2025-09-20-23-06-15/generated_qa/qa.json",
+        "memory/MemRetrieveOilsFromCounterRR/2025-09-20-23-14-26/generated_qa/qa.json"
+    ],
+    "image_keys": ["obs/robot0_agentview_center_image", "obs/robot0_eye_in_hand_image"],
+    "max_traj_len": 1024,
+    "low_dim_keys": [],
+    "group_method": "dinov2",
+    "proprio_keys": ["obs/robot0_joint_pos_cos", "obs/robot0_gripper_qpos"],
+    "action_keys": ["actions"]
+}

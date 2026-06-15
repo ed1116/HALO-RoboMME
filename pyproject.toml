@@ -1,0 +1,71 @@
+[project]
+name = "halo"
+version = "0.1.0"
+requires-python = ">=3.9"
+
+dependencies = [
+  "Pillow",
+  "opencv-python",
+  "tqdm",
+  "tensorboard",
+  "diffusers",
+  "scipy",
+  "timm",
+  "matplotlib",
+  "tyro",
+  "loralib",
+  "h5py",
+  "wandb",
+  "mediapy",
+  "kinpy",
+  "imgviz",
+  "pathos",
+  "tokenizers",
+  "easydict",
+  "pandas",
+  "scikit-learn",
+  "addict",
+  "yapf",
+  "pycocotools",
+  "supervision",
+  "omegaconf",
+  "torchmetrics",
+  "numpy==1.24.0",
+  "einops",
+  "PyOpenGL==3.1.5",
+  # ⚠️ See note about torch/vision/audio below
+  # "torch==2.5.0",
+  # "torchvision==0.20.0",
+  # "torchaudio==2.5.0",
+  "mink==0.0.5",
+  "psutil",
+  "mambapy==1.2.0",
+  "kornia",
+  "openai",
+  "peft==0.18.0",
+  "accelerate==1.11.0"
+]
+
+[project.optional-dependencies]
+graphics = [
+  "pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@stable"
+]
+gr00t = [
+  "albumentations",
+  # "decord",
+  "numpydantic==1.6.7",
+  "pydantic==2.10.6",
+  "peft==0.17.1",
+  "huggingface-hub==0.34.4",
+  "safetensors>=0.4.3",          # explicit to avoid older pulls
+  "llvmlite==0.40.*",
+  "numba==0.57.*"
+]
+
+[tool.setuptools.packages.find]
+include = ["halo"]
+
+# (Optional but recommended)
+[build-system]
+requires = ["setuptools>=68", "wheel", "packaging"]
+build-backend = "setuptools.build_meta"

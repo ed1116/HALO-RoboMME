@@ -1,0 +1,14 @@
+{
+    "dataset_path": [
+        "memory/MemRetrieveOilsFromCounterLL/2025-09-20-22-49-27/demo_im128_notp.hdf5",
+        "memory/MemRetrieveOilsFromCounterLR/2025-09-20-23-25-19/demo_im128_notp.hdf5",
+        "memory/MemRetrieveOilsFromCounterRL/2025-09-20-23-06-15/demo_im128_notp.hdf5",
+        "memory/MemRetrieveOilsFromCounterRR/2025-09-20-23-14-26/demo_im128_notp.hdf5"
+    ],
+    "image_keys": ["obs/robot0_agentview_center_image", "obs/robot0_eye_in_hand_image"],
+    "max_traj_len": 2048,
+    "low_dim_keys": [],
+    "group_method": "dinov2",
+    "proprio_keys": ["obs/robot0_joint_pos_cos", "obs/robot0_gripper_qpos"],
+    "action_keys": ["actions"] 
+}

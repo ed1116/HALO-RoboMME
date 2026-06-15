@@ -1,0 +1,6 @@
+* -whitespace
+*.py   -whitespace
+*.cpp  -whitespace
+*.h    -whitespace
+* whitespace=-trailing-space,-space-before-tab
+
