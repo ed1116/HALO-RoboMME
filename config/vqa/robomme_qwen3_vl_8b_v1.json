@@ -1,0 +1,29 @@
+{
+  "schema_version": "halo.robomme.vqa.model-config/v1",
+  "model_id": "Qwen/Qwen3-VL-8B-Instruct",
+  "model_revision": "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+  "processor_revision": "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+  "dtype": "float16",
+  "attention_implementation": "sdpa",
+  "torch_version": "2.9.1+cu128",
+  "transformers_version": "5.15.1",
+  "qwen_vl_utils_version": "0.0.14",
+  "image_min_pixels": 65536,
+  "image_max_pixels": 16777216,
+  "video_min_pixels": 4096,
+  "video_max_pixels": 25165824,
+  "max_images_per_call": 32,
+  "max_video_frames": 0,
+  "generator_prompt_revision": "robomme-generator-v1",
+  "judge_prompt_revision": "robomme-judge-v1",
+  "generator_generation": {
+    "do_sample": false,
+    "max_new_tokens": 1024,
+    "temperature": 0.0
+  },
+  "judge_generation": {
+    "do_sample": false,
+    "max_new_tokens": 512,
+    "temperature": 0.0
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ed1116/HALO-RoboMME/schemas/vqa/v1/judge.schema.json",
+  "title": "HALO RoboMME independent VQA judge response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "visually_answerable",
+    "history_required",
+    "answer_correct",
+    "unambiguous",
+    "future_leakage",
+    "evidence_timestamps",
+    "reason_code"
+  ],
+  "properties": {
+    "schema_version": {"const": "halo.robomme.vqa.judge/v1"},
+    "visually_answerable": {"type": "boolean"},
+    "history_required": {"type": "boolean"},
+    "answer_correct": {"type": "boolean"},
+    "unambiguous": {"type": "boolean"},
+    "future_leakage": {"type": "boolean"},
+    "evidence_timestamps": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 0}
+    },
+    "reason_code": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    }
+  }
+}

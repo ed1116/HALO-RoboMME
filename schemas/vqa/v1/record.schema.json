@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ed1116/HALO-RoboMME/schemas/vqa/v1/record.schema.json",
+  "title": "HALO RoboMME filtered VQA corpus record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_name",
+    "suite_name",
+    "episode_id",
+    "query_timestep",
+    "candidate_id",
+    "question",
+    "answer",
+    "question_family",
+    "evidence_timestamps",
+    "generator_model_revision",
+    "generator_prompt_revision",
+    "judge_model_revision",
+    "judge_prompt_revision",
+    "source_request_sha256",
+    "generator_response_sha256",
+    "judge_response_sha256",
+    "deterministic_checks",
+    "judge_result",
+    "accepted",
+    "rejection_reason"
+  ],
+  "properties": {
+    "schema_version": {"const": "halo.robomme.vqa.record/v1"},
+    "task_name": {"type": "string"},
+    "suite_name": {"enum": ["counting", "permanence", "reference", "imitation"]},
+    "episode_id": {"type": "string", "pattern": "^[A-Za-z0-9]+/episode_[0-9]+$"},
+    "query_timestep": {"type": "integer", "minimum": 0},
+    "candidate_id": {"type": "string", "pattern": "^candidate-[1-9][0-9]*$"},
+    "question": {"type": "string", "minLength": 1, "maxLength": 512},
+    "answer": {"type": "string", "minLength": 1, "maxLength": 128},
+    "question_family": {"type": "string"},
+    "evidence_timestamps": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 0}
+    },
+    "generator_model_revision": {"type": "string", "minLength": 1},
+    "generator_prompt_revision": {"type": "string", "minLength": 1},
+    "judge_model_revision": {"type": "string", "minLength": 1},
+    "judge_prompt_revision": {"type": "string", "minLength": 1},
+    "source_request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "generator_response_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "judge_response_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "deterministic_checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identifiers_valid",
+        "timestamps_valid",
+        "no_privileged_terms",
+        "count_valid",
+        "not_duplicate",
+        "answer_within_bounds"
+      ],
+      "properties": {
+        "identifiers_valid": {"type": "boolean"},
+        "timestamps_valid": {"type": "boolean"},
+        "no_privileged_terms": {"type": "boolean"},
+        "count_valid": {"type": "boolean"},
+        "not_duplicate": {"type": "boolean"},
+        "answer_within_bounds": {"type": "boolean"}
+      }
+    },
+    "judge_result": {"$ref": "judge.schema.json"},
+    "accepted": {"type": "boolean"},
+    "rejection_reason": {"type": ["string", "null"]}
+  }
+}

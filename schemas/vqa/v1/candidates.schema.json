@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ed1116/HALO-RoboMME/schemas/vqa/v1/candidates.schema.json",
+  "title": "HALO RoboMME VQA candidate response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidates"],
+  "properties": {
+    "schema_version": {"const": "halo.robomme.vqa.candidates/v1"},
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "candidate_id",
+          "question_family",
+          "question",
+          "answer",
+          "evidence_timestamps"
+        ],
+        "properties": {
+          "candidate_id": {"type": "string", "pattern": "^candidate-[1-9][0-9]*$"},
+          "question_family": {"type": "string", "minLength": 1},
+          "question": {"type": "string", "minLength": 1, "maxLength": 512},
+          "answer": {"type": "string", "minLength": 1, "maxLength": 128},
+          "evidence_timestamps": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    }
+  }
+}
