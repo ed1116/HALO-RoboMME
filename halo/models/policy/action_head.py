@@ -11,6 +11,51 @@ from diffusers import DDIMScheduler, DDPMScheduler
 from halo.models.policy.utils import ConditionedDiffusion
 from halo.models.policy.llama import ModelArgs, Transformer
 
+
+def resolve_physical_action_dim(
+    serialized_action_dim: int,
+    action_eos_dim: int = 1,
+    expected_action_dim: Optional[int] = None,
+) -> int:
+    """Resolve physical width while keeping HALO's training-only EOS separate."""
+    action_dim = serialized_action_dim - action_eos_dim
+    if action_dim <= 0:
+        raise ValueError(
+            f"Serialized action width {serialized_action_dim} must exceed EOS width "
+            f"{action_eos_dim}"
+        )
+    if expected_action_dim is not None and action_dim != expected_action_dim:
+        raise ValueError(
+            "Serialized action width does not match the configured physical "
+            f"action width: {serialized_action_dim} - {action_eos_dim} "
+            f"!= {expected_action_dim}"
+        )
+    return action_dim
+
+
+def select_action_targets(
+    actions: torch.Tensor,
+    valid_position_mask: torch.Tensor,
+    num_pred_steps: int,
+    action_dim: int,
+) -> torch.Tensor:
+    """Flatten physical action chunks and select tokens that have output positions."""
+    if actions.ndim != 4:
+        raise ValueError(f"Expected actions shaped (B, T, H, D), got {actions.shape}")
+    if actions.shape[2] != num_pred_steps or actions.shape[3] < action_dim:
+        raise ValueError(
+            f"Expected action tail ({num_pred_steps}, at least {action_dim}), "
+            f"got {tuple(actions.shape[2:])}"
+        )
+    if valid_position_mask.shape != actions.shape[:2]:
+        raise ValueError(
+            f"Expected validity mask {tuple(actions.shape[:2])}, "
+            f"got {tuple(valid_position_mask.shape)}"
+        )
+    flat_dim = num_pred_steps * action_dim
+    targets = actions[..., :action_dim].reshape(*actions.shape[:2], flat_dim)
+    return targets.reshape(-1, flat_dim)[valid_position_mask.reshape(-1)]
+
 class PredHead(abc.ABC, nn.Module):
     """
     Abstract class for prediction head
@@ -122,6 +167,15 @@ class MLPHead(PredHead):
         else:
             action = action[:, :1, :] # only returning first action to execute.
         return action.to(x.device)
+
+    def predict_chunk(
+        self,
+        x: torch.Tensor,
+        num_pred_steps: int,
+        action_dim: int,
+    ) -> torch.Tensor:
+        """Return the full raw action chunk without reading or mutating the queue."""
+        return self.forward(x).view(x.shape[0], num_pred_steps, action_dim)
 
     def reset(self):
         self.action_queue = queue.Queue(maxsize=self.action_chunk_len)
@@ -437,6 +491,15 @@ class FlowMatchingHead(PredHead):
         else:
             action = action[:, :1, :]
         return action.to(x.device)
+
+    def predict_chunk(
+        self,
+        x: torch.Tensor,
+        num_pred_steps: int,
+        action_dim: int,
+    ) -> torch.Tensor:
+        """Return the full raw action chunk without reading or mutating the queue."""
+        return self.forward(x).view(x.shape[0], num_pred_steps, action_dim)
 
     def reset(self):
         self.action_queue = queue.Queue(maxsize=self.action_chunk_len)

@@ -11,7 +11,13 @@ from timm.layers import Mlp
 from tqdm import tqdm, trange
 from termcolor import colored
 
-from halo.models.policy.action_head import MLPHead, CEHead, FlowMatchingHead
+from halo.models.policy.action_head import (
+    MLPHead,
+    CEHead,
+    FlowMatchingHead,
+    resolve_physical_action_dim,
+    select_action_targets,
+)
 import halo.data.utils as data_utils
 from halo.models.policy.llama import Transformer, ModelArgs
 from halo.models.policy.retriever_topk import TopKTransformerBlock
@@ -218,7 +224,14 @@ class MemModel(nn.Module, LanguageModel):
         self.state_supervision_mode = shared_config.state_supervision_mode
         self.max_state_supervision_len = shared_config.max_state_supervision_len
         self.num_pred_steps = shared_config.num_pred_steps
-        self._action_dim = extra_kwargs.get("action_dim") - 1
+        self.serialized_action_dim = extra_kwargs.get("action_dim")
+        self.action_eos_dim = extra_kwargs.get("action_eos_dim", 1)
+        expected_action_dim = extra_kwargs.get("physical_action_dim")
+        self._action_dim = resolve_physical_action_dim(
+            self.serialized_action_dim,
+            self.action_eos_dim,
+            expected_action_dim,
+        )
         self.remove_action = shared_config.remove_action
         self.is_bimanual = shared_config.is_bimanual
         assert not self.is_bimanual, "Bimanual is not supported for MemModel"
@@ -606,9 +619,12 @@ class MemModel(nn.Module, LanguageModel):
         
         # calculate the action target
         act_dim = self.action_dim * self.num_pred_steps
-        # Optimized: combine reshape operations
-        action_tar = action[:, :, :, :self.action_dim].reshape(B_act, T_act, act_dim)
-        action_tar = action_tar.reshape(-1, act_dim)[mask]
+        action_tar = select_action_targets(
+            action,
+            mask.view(B_act, T_act),
+            num_pred_steps=self.num_pred_steps,
+            action_dim=self.action_dim,
+        )
 
         # Optimized: use advanced indexing more efficiently
         # Flatten outputs for easier indexing: (B, L, D) -> (B*L, D)
@@ -721,6 +737,25 @@ class MemModel(nn.Module, LanguageModel):
             gripper_vals = gripper_vals.sign() * (gripper_vals.abs() > 0.5).float()
             action_pred[..., new_pos:new_pos+1] = gripper_vals
         return action_pred
+
+    @torch.inference_mode()
+    def predict_raw_action_chunk(self, action_latents: torch.Tensor) -> torch.Tensor:
+        """Decode every future physical action without using the rollout queue."""
+        action_chunk = self.action_output_head.predict_chunk(
+            action_latents,
+            num_pred_steps=self.num_pred_steps,
+            action_dim=self.action_dim,
+        )
+        expected_shape = (
+            action_latents.shape[0],
+            self.num_pred_steps,
+            self.action_dim,
+        )
+        if action_chunk.shape != expected_shape:
+            raise RuntimeError(
+                f"Action head returned {tuple(action_chunk.shape)}; expected {expected_shape}"
+            )
+        return action_chunk
 
     @torch.inference_mode()
     def forward_inference(
