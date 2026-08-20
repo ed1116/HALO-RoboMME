@@ -66,6 +66,11 @@ gr00t = [
 [tool.setuptools.packages.find]
 include = ["halo"]
 
+[tool.pytest.ini_options]
+markers = [
+  "integration: tests that require the external raw RoboMME corpus and manifest",
+]
+
 # (Optional but recommended)
 [build-system]
 requires = ["setuptools>=68", "wheel", "packaging"]
