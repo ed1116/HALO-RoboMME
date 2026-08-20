@@ -200,5 +200,17 @@ topk-test
 
 CLAUDE.md
 
+# RoboMME local data and artifacts
+/data/
+/runs/
+/models/
+/videos/
+*.h5
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.secret
+
 # macOS
 .DS_Store

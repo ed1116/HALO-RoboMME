@@ -22,6 +22,27 @@ task-relevant information from up to eight minutes of past experience.*
 
 ---
 
+## RoboMME adaptation
+
+This public repository is the `ed1116/HALO-RoboMME` adaptation of the official
+HALO implementation. It targets one balanced multi-task policy across all 16
+RoboMME tasks while preserving HALO's CrossMAE visual encoder, local attention,
+top-k sparse history retrieval, and joint imitation/VQA training.
+
+- Official HALO upstream: commit `7778638401cc07043e59e2381e84f2383401f491`
+- Clean RoboMME interface reference: commit `ecf086c3be7c2223167d9bb2f6ef1f0a6e24353b`
+- Raw data: `/data/ed1116/Datasets/robomme_data_h5` (read-only)
+- Generated data/checkpoints/runs: `/data/ed1116/robomme`
+- Target hardware: NVIDIA Quadro RTX 8000; method training and VQA generation use isolated environments
+
+The RoboMME implementation is in progress. Intentional changes from the original
+HALO experiments are a single multi-task model, front/wrist cameras, 8-D actions,
+a 20-step prediction horizon with 16 executed actions, and Qwen3-VL-8B-Instruct
+as the offline VQA teacher. See [`docs/provenance.md`](docs/provenance.md) for
+the fixed source revisions and adaptation boundary.
+
+---
+
 ## Overview
 
 General-purpose robots operating in partially observable environments (e.g., homes) must recall
