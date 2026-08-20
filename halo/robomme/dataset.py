@@ -656,16 +656,9 @@ class RoboMMEHDF5Dataset(Sequence[RoboMMESample]):
                         current_path = episode.file_path
                     assert handle is not None
                     group = handle[episode.episode_key]
-                    execution_actions = [
-                        _read_action(group, timestep)
-                        for timestep in range(episode.execution_start, episode.num_timesteps)
-                    ]
-                    for offset, timestep in enumerate(
-                        range(episode.execution_start, episode.num_timesteps)
-                    ):
+                    for timestep in range(episode.execution_start, episode.num_timesteps):
                         _, _, state = _read_state(group[f"timestep_{timestep}"])
-                        actions = np.stack(execution_actions[offset : offset + self.horizon])
-                        yield state, actions
+                        yield state, _read_action(group, timestep)[None, :]
             finally:
                 if handle is not None:
                     handle.close()

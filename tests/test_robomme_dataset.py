@@ -222,7 +222,7 @@ def test_sample_validation_rejects_invalid_gripper_action(tmp_path):
 
 
 def test_training_statistics_are_execution_only_and_record_provenance(tmp_path):
-    write_fixture(tmp_path)
+    write_fixture(tmp_path, timesteps=4)
     train = RoboMMEHDF5Dataset(
         tmp_path, horizon=4, split="train", dev_episodes_per_task=1
     )
@@ -239,7 +239,7 @@ def test_training_statistics_are_execution_only_and_record_provenance(tmp_path):
         sample.target_actions,
         atol=1e-5,
     )
-    assert stats.sample_count == 16 * 3
+    assert stats.sample_count == 16 * 3 * 2
     assert stats.action_count == stats.sample_count
     payload = json.loads(stats.to_json())
     assert payload["provenance"]["split"] == "train"
