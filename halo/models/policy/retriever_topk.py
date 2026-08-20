@@ -88,12 +88,20 @@ class LongTermBank(nn.Module):
         D = k.shape[-1]
         device = k.device
 
-        # start positions per batch: shape (B, 1)
-        if self.max_n_valid_entries == 0:
-            start = torch.zeros((B, 1), device=device, dtype=torch.long)
-        else:
-            start = self.n_valid_entries[:B].view(B, 1)  # (B,1)
+        if B > self.cache_k.shape[0]:
+            raise ValueError(
+                f"Cannot store batch size {B} in a bank with capacity "
+                f"{self.cache_k.shape[0]}"
+            )
+        end = self.n_valid_entries[:B].to(dtype=torch.long) + T_store
+        if torch.any(end > self.cache_k.shape[1]):
+            raise ValueError(
+                f"Cannot store {T_store} entries: long-term bank capacity "
+                f"{self.cache_k.shape[1]} would be exceeded"
+            )
 
+        # start positions per batch: shape (B, 1)
+        start = self.n_valid_entries[:B].view(B, 1).to(dtype=torch.long)
 
         # seq indices: (B, T_store)
         seq_idx = start + torch.arange(T_store, device=device).view(1, T_store)
@@ -108,26 +116,56 @@ class LongTermBank(nn.Module):
         # update mask (bool scatter)
         self.mask[:B].scatter_(1, seq_idx, torch.ones_like(seq_idx, dtype=torch.bool))
 
-        # update counters (no Python loop if T is uniform)
-        if self.max_n_valid_entries == 0:
-            self.n_valid_entries[:B].fill_(T_store)
-            self.max_n_valid_entries = T_store
-        else:
-            self.n_valid_entries[:B] += T_store
-            # keep as python int, but compute cheaply
-            self.max_n_valid_entries = min(
-                self.max_n_valid_entries + T_store,
-                self.cache_k.shape[1],   # args.max_seq_len
-            )
+        # update counters only after every scatter has succeeded
+        self.n_valid_entries[:B] += T_store
+        self.max_n_valid_entries = int(self.n_valid_entries.max().item())
 
-    def retrieve_from_empty_bank(self, q: torch.Tensor, topk: int):
+    @staticmethod
+    def _pad_retrieval(
+        scores: torch.Tensor,
+        indices: torch.Tensor,
+        validity: torch.Tensor,
+        topk: int,
+    ):
+        padding = topk - scores.shape[-1]
+        if padding <= 0:
+            return scores, indices, validity
+        shape = (*scores.shape[:-1], padding)
+        scores = torch.cat([scores, scores.new_zeros(shape)], dim=-1)
+        indices = torch.cat([indices, indices.new_zeros(shape)], dim=-1)
+        validity = torch.cat([validity, validity.new_zeros(shape)], dim=-1)
+        return scores, indices, validity
+
+    @staticmethod
+    def _retrieval_result(
+        scores: torch.Tensor,
+        indices: torch.Tensor,
+        retrieved_v: torch.Tensor,
+        validity: torch.Tensor,
+        return_validity: bool,
+    ):
+        result = scores, indices, retrieved_v
+        if return_validity:
+            return (*result, validity)
+        return result
+
+    def retrieve_from_empty_bank(
+        self, q: torch.Tensor, topk: int, return_validity: bool = False
+    ):
         scores = torch.zeros((q.shape[0], q.shape[1], topk), device=q.device, dtype=q.dtype)
         indices = torch.zeros((q.shape[0], q.shape[1], topk), device=q.device, dtype=torch.long)
         retrieved_v = torch.zeros((q.shape[0], q.shape[1], topk, q.shape[2], q.shape[3]), device=q.device, dtype=q.dtype)
-        return scores, indices, retrieved_v
+        validity = torch.zeros_like(scores, dtype=torch.bool)
+        return self._retrieval_result(
+            scores, indices, retrieved_v, validity, return_validity
+        )
 
     def retrieve_kv(
-        self, q: torch.Tensor, topk: int, query_timesteps: Optional[torch.Tensor] = None
+        self,
+        q: torch.Tensor,
+        topk: int,
+        query_timesteps: Optional[torch.Tensor] = None,
+        return_validity: bool = False,
     ):
         '''
         Args:
@@ -148,9 +186,13 @@ class LongTermBank(nn.Module):
         sim = sim.masked_fill(~mask[:, None, :], -torch.inf)
         # non-differentiable topk
         scores, indices = sim.topk(max_topk, dim=-1) # (bsz, seqlen, topk)
-        if max_topk < topk:
-            scores = torch.cat([scores, torch.zeros((bsz, seqlen, topk - max_topk), device=q.device, dtype=q.dtype)], dim=-1)
-            indices = torch.cat([indices, torch.zeros(bsz, seqlen, topk - max_topk, device=q.device, dtype=torch.long)], dim=-1)
+        selected_mask = mask[:, None, :].expand(-1, seqlen, -1)
+        validity = torch.gather(selected_mask, dim=-1, index=indices)
+        validity = validity & torch.isfinite(scores)
+        scores, indices, validity = self._pad_retrieval(
+            scores, indices, validity, topk
+        )
+        indices = indices.masked_fill(~validity, 0)
         # use straight-through estimator to make the query in the computation graph
         if self.training:
             # idx = indices.detach()  # treat membership as constant
@@ -163,6 +205,7 @@ class LongTermBank(nn.Module):
             scores = torch.einsum('btsd,btnd->btsn', q_vec, keys) / (q_vec.norm(dim=-1, keepdim=True) * keys.norm(dim=-1, keepdim=True).transpose(-1, -2) + 1e-8)
             scores = scores.squeeze(-2)
             # assert the new_scores and scores are the same
+        scores = scores.masked_fill(~validity, 0.0)
 
         # retrieve the values from the cache
         cache_v = self.cache_v[:bsz, :self.max_n_valid_entries] # (bsz, n, d)
@@ -171,11 +214,14 @@ class LongTermBank(nn.Module):
         if self.ret_add_time_aware:
             te_idx = self._retrieval_time_indices(indices, query_timesteps)
             retrieved_v = self.time_encoding(retrieved_v, te_idx)
+        retrieved_v = retrieved_v.masked_fill(~validity.unsqueeze(-1), 0.0)
         retrieved_v = retrieved_v.view(bsz, seqlen, topk, n_heads, head_dim)
         # Convert retrieved values and scores to match query dtype (important for autocast compatibility)
         retrieved_v = retrieved_v.to(q.dtype)
         scores = scores.to(q.dtype)
-        return scores, indices, retrieved_v
+        return self._retrieval_result(
+            scores, indices, retrieved_v, validity, return_validity
+        )
 
     def is_empty(self):
         return self.max_n_valid_entries == 0
@@ -207,6 +253,7 @@ class LongTermBankCausal(LongTermBank):
         topk: int,
         start_pos: int = 0,
         query_timesteps: Optional[torch.Tensor] = None,
+        return_validity: bool = False,
     ):
         max_topk = min(topk, self.max_n_valid_entries)
         # assert q.ndim == 4, f"q should be of shape (bsz, seqlen, n_heads, head_dim), but got {q.shape}"
@@ -224,13 +271,12 @@ class LongTermBankCausal(LongTermBank):
         sim = sim.masked_fill(mask, -torch.inf)
         # non-differentiable topk
         scores, indices = sim.topk(max_topk, dim=-1) # (bsz, seqlen, topk)
-        if max_topk < topk:
-            scores = torch.cat([scores, torch.zeros((bsz, seqlen, topk - max_topk), device=q.device, dtype=q.dtype)], dim=-1)
-            indices = torch.cat([indices, torch.zeros(bsz, seqlen, topk - max_topk, device=q.device, dtype=torch.long)], dim=-1)
-        # change the scores to be 0 for positions that are not valid; correspondingly change the indices to be 0
         gathered_mask = torch.gather(mask, dim=-1, index=indices)
-        scores.masked_fill_(gathered_mask, 0.0)
-        indices.masked_fill_(gathered_mask, 0)
+        validity = (~gathered_mask) & torch.isfinite(scores)
+        scores, indices, validity = self._pad_retrieval(
+            scores, indices, validity, topk
+        )
+        indices = indices.masked_fill(~validity, 0)
 
         # use straight-through estimator to make the query in the computation graph
         if self.training:
@@ -240,6 +286,7 @@ class LongTermBankCausal(LongTermBank):
             keys = cache_k[batch, indices] # (bsz, seqlen, topk, dim)
             scores = torch.einsum('btsd,btnd->btsn', q_vec, keys) / (q_vec.norm(dim=-1, keepdim=True) * keys.norm(dim=-1, keepdim=True).transpose(-1, -2) + 1e-8)
             scores = scores.squeeze(-2)
+        scores = scores.masked_fill(~validity, 0.0)
 
         # retrieve the values from the cache
         cache_v = self.cache_v[:bsz, :self.max_n_valid_entries] # (bsz, n, d)
@@ -248,14 +295,23 @@ class LongTermBankCausal(LongTermBank):
         if self.ret_add_time_aware:
             te_idx = self._retrieval_time_indices(indices, query_timesteps)
             retrieved_v = self.time_encoding(retrieved_v, te_idx)
+        retrieved_v = retrieved_v.masked_fill(~validity.unsqueeze(-1), 0.0)
         retrieved_v = retrieved_v.view(bsz, seqlen, topk, n_heads, head_dim)
         # Convert retrieved values and scores to match query dtype (important for autocast compatibility)
         retrieved_v = retrieved_v.to(q.dtype)
         scores = scores.to(q.dtype)
-        return scores, indices, retrieved_v
+        return self._retrieval_result(
+            scores, indices, retrieved_v, validity, return_validity
+        )
 
 class LongTermBankMultiKV(LongTermBank):
-    def retrieve_kv(self, q: torch.Tensor, topk: int):
+    def retrieve_kv(
+        self,
+        q: torch.Tensor,
+        topk: int,
+        query_timesteps: Optional[torch.Tensor] = None,
+        return_validity: bool = False,
+    ):
         '''
         Args:
             q: the query tensor of shape (bsz, seqlen, n_heads, head_dim)
@@ -278,9 +334,15 @@ class LongTermBankMultiKV(LongTermBank):
         sim = sim.masked_fill(~mask[:, None, None, :], -torch.inf)
         # non-differentiable topk
         scores, indices = sim.topk(max_topk, dim=-1) # (bsz, heads, seqlen, topk)
-        if max_topk < topk:
-            scores = torch.cat([scores, torch.zeros((bsz, n_heads, seqlen, topk - max_topk), device=q.device, dtype=q.dtype)], dim=-1)
-            indices = torch.cat([indices, torch.zeros(bsz, n_heads, seqlen, topk - max_topk, device=q.device, dtype=torch.long)], dim=-1)
+        selected_mask = mask[:, None, None, :].expand(
+            -1, n_heads, seqlen, -1
+        )
+        validity = torch.gather(selected_mask, dim=-1, index=indices)
+        validity = validity & torch.isfinite(scores)
+        scores, indices, validity = self._pad_retrieval(
+            scores, indices, validity, topk
+        )
+        indices = indices.masked_fill(~validity, 0)
         # use straight-through estimator to make the query in the computation graph
         if self.training:
             # recalculate the scores to maintain the gradient flow
@@ -291,6 +353,7 @@ class LongTermBankMultiKV(LongTermBank):
             scores = torch.einsum('bhtsd,bhtnd->bhtsn', q_vec, keys) / (q_vec.norm(dim=-1, keepdim=True) * keys.norm(dim=-1, keepdim=True).transpose(-1, -2) + 1e-8)
             scores = scores.squeeze(-2) # (bsz, n_heads, seqlen, topk)
             # assert the new_scores and scores are the same
+        scores = scores.masked_fill(~validity, 0.0)
 
         # retrieve the values from the cache
         cache_v = self.cache_v[:bsz, :self.max_n_valid_entries] # (bsz, n, d)
@@ -298,19 +361,27 @@ class LongTermBankMultiKV(LongTermBank):
         batch = torch.arange(cache_v.size(0), device=cache_v.device)[:, None, None, None]  # [b,1,1,1]
         heads = torch.arange(n_heads, device=cache_v.device)[None, :, None, None] # (1, n_heads, 1, 1)
         retrieved_v = cache_v[batch, heads, indices] # (bsz, n_heads, seqlen, topk, head_dim)
-        retrieved_v = retrieved_v
+        retrieved_v = retrieved_v.masked_fill(~validity.unsqueeze(-1), 0.0)
 
         indices = indices.permute(0, 2, 3, 1) # (bsz, seqlen, topk, n_heads)
         scores = scores.permute(0, 2, 3, 1) # (bsz, seqlen, topk, n_heads)
+        validity = validity.permute(0, 2, 3, 1)
         retrieved_v = retrieved_v.permute(0, 2, 3, 1, 4) # (bsz, seqlen, topk, n_heads, head_dim)
-        return scores, indices, retrieved_v
+        return self._retrieval_result(
+            scores, indices, retrieved_v, validity, return_validity
+        )
 
-    def retrieve_from_empty_bank(self, q: torch.Tensor, topk: int):
+    def retrieve_from_empty_bank(
+        self, q: torch.Tensor, topk: int, return_validity: bool = False
+    ):
         bsz, seqlen, n_heads, head_dim = q.shape
         scores = torch.zeros((bsz, seqlen, topk, n_heads), device=q.device, dtype=q.dtype)
         indices = torch.zeros((bsz, seqlen, topk, n_heads), device=q.device, dtype=torch.long)
         retrieved_v = torch.zeros((bsz, seqlen, topk, n_heads, head_dim), device=q.device, dtype=q.dtype)
-        return scores, indices, retrieved_v
+        validity = torch.zeros_like(scores, dtype=torch.bool)
+        return self._retrieval_result(
+            scores, indices, retrieved_v, validity, return_validity
+        )
 
 
 class TopKAttention(Attention):
@@ -384,21 +455,34 @@ class TopKAttention(Attention):
             query_timesteps: (bsz, seqlen) global query positions for relative retrieval-time encoding.
         '''
         # retrieve keys and values from long-term bank: make it all zeros if bank is empty
-        scores, indices, retrieved_v = None, None, None
+        scores, indices, retrieved_v, validity = None, None, None, None
         if not self.long_term_bank.is_empty():
             # retrieve the topk values from the long-term bank
-            scores, indices, retrieved_v = self.long_term_bank.retrieve_kv(
-                xq_bank, topk, query_timesteps=query_timesteps
+            scores, indices, retrieved_v, validity = self.long_term_bank.retrieve_kv(
+                xq_bank,
+                topk,
+                query_timesteps=query_timesteps,
+                return_validity=True,
             )
         else:
-            scores, indices, retrieved_v = self.long_term_bank.retrieve_from_empty_bank(xq_bank, topk)
+            scores, indices, retrieved_v, validity = (
+                self.long_term_bank.retrieve_from_empty_bank(
+                    xq_bank, topk, return_validity=True
+                )
+            )
         scores = scores / self.tau
-        return scores, indices, retrieved_v
+        return scores, indices, retrieved_v, validity
 
     def _requires_individual_values(self):
         return self.training and (not self.straight_through_estimator)
 
-    def _get_output_from_retrieved_values(self, scores: torch.Tensor, values: torch.Tensor, retrieved_v: torch.Tensor):
+    def _get_output_from_retrieved_values(
+        self,
+        scores: torch.Tensor,
+        values: torch.Tensor,
+        retrieved_v: torch.Tensor,
+        validity: Optional[torch.Tensor] = None,
+    ):
         '''
         Args:
             scores: the scores tensor of shape (bsz, seqlen, topk)
@@ -409,9 +493,17 @@ class TopKAttention(Attention):
                 - individual: use the retrieved values into batch size for calculating the log_py_xzk (later used for the retriever loss)
         '''
 
-        # use score for the weighted sum of retrieved values
-        log_pz = F.log_softmax(scores, dim=2) # (bsz, seqlen, topk) OR (bsz, seqlen, topk, n_heads)
-        pz = log_pz.exp().unsqueeze(dim=-1) # (bsz, seqlen, topk, 1) OR (bsz, seqlen, topk, n_heads, 1)
+        # Normalize only over valid selections. In particular, fully masked rows
+        # stay finite and assign zero probability to every retrieval slot.
+        if validity is None:
+            validity = torch.ones_like(scores, dtype=torch.bool)
+        masked_scores = scores.masked_fill(~validity, -torch.inf)
+        has_valid = validity.any(dim=2, keepdim=True)
+        safe_scores = torch.where(has_valid, masked_scores, torch.zeros_like(scores))
+        log_pz = F.log_softmax(safe_scores, dim=2)
+        pz = torch.where(validity, log_pz.exp(), torch.zeros_like(log_pz))
+        log_pz = log_pz.masked_fill(~validity, torch.finfo(log_pz.dtype).min)
+        pz = pz.unsqueeze(dim=-1) # (bsz, seqlen, topk, 1) OR (bsz, seqlen, topk, n_heads, 1)
         if pz.ndim == 4:
             pz = pz.unsqueeze(dim=-1) # (bsz, seqlen, topk, 1, 1)
         assert pz.ndim == retrieved_v.ndim, f"scores and retrieved_v should have the same number of dimensions, but got {scores.ndim=}, {retrieved_v.ndim=}"
@@ -434,6 +526,7 @@ class TopKAttention(Attention):
             retriever_info["output_individual"] = output_individual
             retriever_info["scores"] = scores
             retriever_info["log_pz"] = log_pz
+            retriever_info["validity"] = validity
         return combined_values, retriever_info
 
     def forward(self, x: torch.Tensor, start_pos: int, freqs_cis: Tuple[torch.Tensor, torch.Tensor], mask: Optional[torch.Tensor] = None, topk: Optional[int] = None):
@@ -464,6 +557,7 @@ class TopKAttention(Attention):
             "output_individual": [],
             "scores": [],
             "log_pz": [],
+            "validity": [],
             "indices": [],
         }
         all_scores = []
@@ -477,14 +571,16 @@ class TopKAttention(Attention):
 
             xq_bank, xq, keys, values = self._prepare_qkv(chunk_x, freqs_cis, start_pos=0, timesteps=chunk_timesteps)
 
-            scores, indices, retrieved_v = self._retrieve_values(
+            scores, indices, retrieved_v, validity = self._retrieve_values(
                 xq_bank, topk, query_timesteps=chunk_timesteps
             )
             all_scores.append(scores)
             self.long_term_bank.store_kv(keys.detach(), values.detach())
 
             retriever_info_chunks["indices"].append(indices)
-            chunk_output, chunk_retriever_info = self._get_output_from_retrieved_values(scores, values, retrieved_v)
+            chunk_output, chunk_retriever_info = self._get_output_from_retrieved_values(
+                scores, values, retrieved_v, validity
+            )
 
             if self._requires_individual_values():
                 assert all(k in chunk_retriever_info for k in ["output_individual", "scores", "log_pz"]), \
@@ -492,6 +588,7 @@ class TopKAttention(Attention):
                 retriever_info_chunks["output_individual"].append(chunk_retriever_info["output_individual"])
                 retriever_info_chunks["scores"].append(chunk_retriever_info["scores"])
                 retriever_info_chunks["log_pz"].append(chunk_retriever_info["log_pz"])
+                retriever_info_chunks["validity"].append(chunk_retriever_info["validity"])
 
             batch_idx = torch.arange(bsz, device=x.device).unsqueeze(1).expand(-1, seqlen_i)
             seq_idx = torch.arange(i, i+seqlen_i, device=x.device).unsqueeze(0).expand(bsz, -1)
@@ -505,6 +602,7 @@ class TopKAttention(Attention):
             if len(retriever_info_chunks["output_individual"]) > 0:
                 retriever_info["scores"] = torch.cat(retriever_info_chunks["scores"], dim=1)
                 retriever_info["log_pz"] = torch.cat(retriever_info_chunks["log_pz"], dim=1)
+                retriever_info["validity"] = torch.cat(retriever_info_chunks["validity"], dim=1)
                 retriever_info["output_individual"] = torch.cat(retriever_info_chunks["output_individual"], dim=1)
                 retriever_info["indices"] = torch.cat(retriever_info_chunks["indices"], dim=1)
         self.logging_values["indices"] = torch.cat(retriever_info_chunks["indices"], dim=1)
@@ -540,13 +638,15 @@ class TopKAttention(Attention):
         self.long_term_bank.max_n_valid_entries = min(block_start, saved_max)
 
         query_timesteps = start_pos + local_timesteps
-        scores, indices, retrieved_v = self._retrieve_values(
+        scores, indices, retrieved_v, validity = self._retrieve_values(
             xq_bank, topk, query_timesteps=query_timesteps
         )
 
         self.long_term_bank.max_n_valid_entries = saved_max  # restore before storing
         self.long_term_bank.store_kv(keys.detach(), values.detach())
-        output, retriever_info = self._get_output_from_retrieved_values(scores, values, retrieved_v)
+        output, retriever_info = self._get_output_from_retrieved_values(
+            scores, values, retrieved_v, validity
+        )
 
         self.logging_values["indices"] = indices
         self.logging_values["topk"] = topk
@@ -577,15 +677,23 @@ class TopKAttentionCausal(TopKAttention):
         query_timesteps = start_pos + torch.arange(
             seqlen, device=xq_bank.device, dtype=torch.long
         ).unsqueeze(0).expand(bsz, -1)
-        scores, indices, retrieved_v = None, None, None
+        scores, indices, retrieved_v, validity = None, None, None, None
         if not self.long_term_bank.is_empty():
-            scores, indices, retrieved_v = self.long_term_bank.retrieve_kv(
-                xq_bank, topk, start_pos=start_pos, query_timesteps=query_timesteps
+            scores, indices, retrieved_v, validity = self.long_term_bank.retrieve_kv(
+                xq_bank,
+                topk,
+                start_pos=start_pos,
+                query_timesteps=query_timesteps,
+                return_validity=True,
             )
         else:
-            scores, indices, retrieved_v = self.long_term_bank.retrieve_from_empty_bank(xq_bank, topk)
+            scores, indices, retrieved_v, validity = (
+                self.long_term_bank.retrieve_from_empty_bank(
+                    xq_bank, topk, return_validity=True
+                )
+            )
         scores = scores / self.tau
-        return scores, indices, retrieved_v
+        return scores, indices, retrieved_v, validity
 
     def forward(self, x: torch.Tensor, start_pos: int, freqs_cis: Tuple[torch.Tensor, torch.Tensor], mask: Optional[torch.Tensor] = None, topk: Optional[int] = None):
         if topk is None:
@@ -602,8 +710,12 @@ class TopKAttentionCausal(TopKAttention):
         xq_bank, xq, keys, values = self._prepare_qkv(x, freqs_cis, start_pos=start_pos, timesteps=all_timesteps)
         # Store new tokens first, then retrieve with causal mask (position-aware)
         self.long_term_bank.store_kv(keys.detach(), values.detach())
-        scores, indices, retrieved_v = self._retrieve_values(xq_bank, topk, start_pos=start_pos)
-        output, _ = self._get_output_from_retrieved_values(scores, values, retrieved_v)
+        scores, indices, retrieved_v, validity = self._retrieve_values(
+            xq_bank, topk, start_pos=start_pos
+        )
+        output, _ = self._get_output_from_retrieved_values(
+            scores, values, retrieved_v, validity
+        )
         assert output.shape == (bsz, seqlen, x.shape[2]), f"output should have the shape (bsz, seqlen, {x.shape[2]}), but got {output.shape=}"
 
         retriever_info = {}
