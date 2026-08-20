@@ -21,6 +21,7 @@ dependencies = [
   "imgviz",
   "pathos",
   "tokenizers",
+  "transformers==4.51.3",
   "easydict",
   "pandas",
   "scikit-learn",
