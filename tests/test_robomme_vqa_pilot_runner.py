@@ -121,3 +121,35 @@ def test_output_directory_guard_distinguishes_fresh_resumable_and_finished(
     (fresh / "manifest.json").write_text(json.dumps({}), encoding="utf-8")
     with pytest.raises(FileExistsError, match="completed pilot"):
         runner.prepare_output_dir(fresh, resume=True)
+
+
+class _StubRequest:
+    def __init__(self, task_name: str) -> None:
+        self.task_name = task_name
+
+
+class _StubArtifact:
+    def __init__(self, tasks: list[str]) -> None:
+        self.requests = {
+            f"{index:064x}": _StubRequest(task) for index, task in enumerate(tasks)
+        }
+
+
+def test_per_task_selection_covers_every_task_instead_of_a_prefix() -> None:
+    """Requests are grouped by task, so a plain prefix would miss most tasks."""
+    runner = _runner()
+    tasks = ["BinFill"] * 6 + ["PickXtimes"] * 6 + ["StopCube"] * 6
+    artifact = _StubArtifact(tasks)
+
+    everything = runner.select_requests(artifact, per_task=0)
+    assert len(everything) == 18
+    assert [h for h, _ in everything] == list(artifact.requests)
+
+    one_each = runner.select_requests(artifact, per_task=1)
+    assert [r.task_name for _, r in one_each] == ["BinFill", "PickXtimes", "StopCube"]
+
+    two_each = runner.select_requests(artifact, per_task=2)
+    assert len(two_each) == 6
+    assert {r.task_name for _, r in two_each} == {"BinFill", "PickXtimes", "StopCube"}
+    # Deterministic, so a resumed run selects exactly the same requests.
+    assert runner.select_requests(artifact, per_task=2) == two_each

@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--max-requests", type=int, default=96)
+    parser.add_argument(
+        "--per-task",
+        type=int,
+        default=0,
+        help="Take only the first N requests of each task, for a stratified gate run.",
+    )
     parser.add_argument("--candidate-count", type=int, default=3)
     parser.add_argument("--max-evidence-frames", type=int, default=16)
     parser.add_argument("--device", default="cuda")
@@ -119,6 +126,25 @@ def recover_completed_work(
     return kept, progress
 
 
+def select_requests(artifact: Any, *, per_task: int) -> list[tuple[str, Any]]:
+    """Order requests deterministically, optionally capped per task.
+
+    The artifact groups requests by task, so a plain prefix would cover only the
+    first task or two. A per-task cap gives a gate run every task and suite.
+    """
+    ordered = list(artifact.requests.items())
+    if per_task <= 0:
+        return ordered
+    taken: Counter[str] = Counter()
+    selected: list[tuple[str, Any]] = []
+    for source_hash, request in ordered:
+        if taken[request.task_name] >= per_task:
+            continue
+        taken[request.task_name] += 1
+        selected.append((source_hash, request))
+    return selected
+
+
 def main() -> None:
     args = parse_args()
     if args.max_requests <= 0:
@@ -157,10 +183,9 @@ def main() -> None:
         max_evidence_frames=args.max_evidence_frames,
     )
 
+    selected = select_requests(artifact, per_task=args.per_task)[: args.max_requests]
     start_time = time.perf_counter()
-    for request_index, (source_hash, request) in enumerate(artifact.requests.items()):
-        if request_index == args.max_requests:
-            break
+    for request_index, (source_hash, request) in enumerate(selected):
         if source_hash in attempted:
             continue
         try:
@@ -233,6 +258,8 @@ def main() -> None:
         "candidate_count": args.candidate_count,
         "max_evidence_frames": args.max_evidence_frames,
         "max_requests": args.max_requests,
+        "per_task": args.per_task,
+        "selected_requests": len(selected),
         "resumed": args.resume,
         "elapsed_seconds": elapsed_seconds,
         "requests_per_second": (
