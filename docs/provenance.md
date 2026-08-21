@@ -21,3 +21,23 @@ The raw HDF5 dataset is read from
 `/data/ed1116/Datasets/robomme_data_h5`. Generated VQA, processed artifacts,
 checkpoints, and runs live under `/data/ed1116/robomme` and are never committed.
 
+
+## Environments
+
+The repository has no in-tree virtual environment. Interpreters live outside
+Git under `/data/ed1116/robomme/envs` so that weights, caches, and packages
+stay off the repository:
+
+| Environment | Path | Role |
+| --- | --- | --- |
+| HALO policy | `/data/ed1116/robomme/envs/halo` | Policy code and the `tests/` suite. Pins Transformers 4.51.3. |
+| HALO VQA | `/data/ed1116/robomme/envs/halo-vqa` | Pinned Qwen3-VL generation/judging runtime, isolated because it needs Transformers 5.x. |
+
+Run the suite with the policy environment from the repository root:
+
+```bash
+/data/ed1116/robomme/envs/halo/bin/python -m pytest -q tests
+```
+
+The `robomme` micromamba environment is the RoboMME simulator/benchmark
+runtime. It is deliberately separate and cannot run this suite.
