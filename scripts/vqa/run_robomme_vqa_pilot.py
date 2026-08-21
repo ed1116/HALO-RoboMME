@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--request-manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--max-requests", type=int, default=100)
+    parser.add_argument("--max-requests", type=int, default=96)
     parser.add_argument("--candidate-count", type=int, default=3)
     parser.add_argument("--max-evidence-frames", type=int, default=16)
     parser.add_argument("--device", default="cuda")

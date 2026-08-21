@@ -18,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--raw-root", type=Path, required=True)
     parser.add_argument("--shared-manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--target-requests", type=int, default=100)
+    parser.add_argument("--target-requests", type=int, default=96)
     parser.add_argument("--split-seed", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-evidence-frames", type=int, default=16)

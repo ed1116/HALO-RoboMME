@@ -128,6 +128,7 @@ def _query_timestep(
     boundaries: Sequence[bool],
     *,
     seed: int,
+    min_history: int,
 ) -> int:
     if episode.num_timesteps < 2:
         raise ValueError(f"{episode.task_name}/{episode.episode_key} has no visual history")
@@ -147,6 +148,18 @@ def _query_timestep(
     if not candidates:
         midpoint = execution_start + (last - execution_start) // 2
         candidates = list(range(midpoint, last + 1))
+    # Every episode flags a subgoal boundary at timestep 0. For the nine tasks
+    # with a video-demo prefix it maps to the first frame after the demo, which
+    # carries the whole demonstration as history and is the strongest memory
+    # probe those tasks have. For the seven tasks without a prefix it maps to
+    # timestep 1, which asks a memory question with a single earlier frame.
+    # Requiring enough earlier frames to fill the evidence budget keeps the
+    # former and drops only the latter.
+    with_history = [
+        candidate for candidate in candidates if candidate >= min_history
+    ]
+    if with_history:
+        candidates = with_history
     rank = int.from_bytes(
         _stable_rank(seed, "query", episode.task_name, episode.episode_key), "big"
     )
@@ -189,7 +202,9 @@ def _plan_episode(
         boundaries, annotation_source = _annotation_boundaries(
             group, episode.num_timesteps
         )
-        query = _query_timestep(episode, boundaries, seed=seed)
+        query = _query_timestep(
+            episode, boundaries, seed=seed, min_history=max_evidence_frames
+        )
         candidates = _evenly_spaced_timestamps(
             query, DEFAULT_CANDIDATE_TIMELINE_FRAMES
         )
@@ -291,7 +306,7 @@ def plan_pilot_requests(
     raw_root: str | Path,
     shared_manifest: str | Path,
     *,
-    target_requests: int = 100,
+    target_requests: int = 96,
     split_seed: int = 0,
     seed: int = 0,
     max_evidence_frames: int = 16,
@@ -391,7 +406,7 @@ def build_pilot_requests(
     shared_manifest: str | Path,
     output_dir: str | Path,
     *,
-    target_requests: int = 100,
+    target_requests: int = 96,
     split_seed: int = 0,
     seed: int = 0,
     max_evidence_frames: int = 16,

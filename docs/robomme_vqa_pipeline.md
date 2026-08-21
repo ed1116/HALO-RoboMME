@@ -42,14 +42,24 @@ VLM prompt. Subgoal boundaries are not task-event counts, so the v1 builder
 leaves known counts empty unless a future task-specific oracle can establish
 them. The selector always discards frames after the query timestep.
 
-Build the bounded, task-balanced 100-request pilot directly from the canonical
-training episode split with:
+The query timestep is chosen from the frames just after subgoal boundaries, and
+must have at least `max_evidence_frames` earlier frames. Every episode flags a
+boundary at timestep 0. Nine of the sixteen tasks carry a contiguous
+`is_video_demo` prefix during which the robot may not move, so for them that
+boundary resolves to the first frame after the demonstration -- the strongest
+memory probe those tasks offer, which the floor preserves. The seven tasks with
+no prefix (BinFill, PickXtimes, SwingXtimes, StopCube, ButtonUnmask,
+ButtonUnmaskSwap, PickHighlight) would otherwise be queried at timestep 1, which
+asks a memory question with a single earlier frame; the floor drops only that.
+
+Build the bounded, task-balanced 96-request pilot (16 tasks x 6) directly from
+the canonical training episode split with:
 
 ```bash
 python scripts/vqa/build_robomme_vqa_requests.py \
   --raw-root /data/ed1116/Datasets/robomme_data_h5 \
   --shared-manifest /data/ed1116/robomme/manifests/robomme_hdf5_v1.json \
-  --output-dir /data/ed1116/robomme/vqa/halo/requests/pilot-v1
+  --output-dir /data/ed1116/robomme/vqa/halo/requests/pilot-v2
 ```
 
 The new output directory contains only selected PNGs under `images/`, strict
@@ -80,10 +90,16 @@ Use a new directory below `/data/ed1116/robomme/vqa/halo` for every run:
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 python scripts/vqa/run_robomme_vqa_pilot.py \
-  --requests-jsonl /data/ed1116/robomme/vqa/halo/requests/pilot-v1/requests.jsonl \
-  --output-dir /data/ed1116/robomme/vqa/halo/pilot-v1 \
-  --max-requests 100
+  --requests-jsonl /data/ed1116/robomme/vqa/halo/requests/pilot-v2/requests.jsonl \
+  --request-manifest /data/ed1116/robomme/vqa/halo/requests/pilot-v2/manifest.json \
+  --output-dir /data/ed1116/robomme/vqa/halo/pilot-v2 \
+  --max-requests 96
 ```
+
+The run is resumable: records are flushed to disk before the request is marked
+complete, so `--resume` continues an interrupted run without repeating or losing
+finished model calls. Pass `CUDA_VISIBLE_DEVICES=4` or `5`; GPUs 0-3 carry other
+work.
 
 The command refuses relative paths, output outside the approved artifact
 root, the artifact root itself, and an existing run directory. It writes all
@@ -126,10 +142,10 @@ Create the suite-level pilot review packet with:
 
 ```bash
 python scripts/vqa/audit_robomme_vqa.py \
-  --records-jsonl /data/ed1116/robomme/vqa/halo/pilot-v1/records.jsonl \
-  --requests-jsonl /data/ed1116/robomme/vqa/halo/requests/pilot-v1/requests.jsonl \
-  --request-manifest /data/ed1116/robomme/vqa/halo/requests/pilot-v1/manifest.json \
-  --output-dir /data/ed1116/robomme/vqa/halo/pilot-v1-audit \
+  --records-jsonl /data/ed1116/robomme/vqa/halo/pilot-v2/records.jsonl \
+  --requests-jsonl /data/ed1116/robomme/vqa/halo/requests/pilot-v2/requests.jsonl \
+  --request-manifest /data/ed1116/robomme/vqa/halo/requests/pilot-v2/manifest.json \
+  --output-dir /data/ed1116/robomme/vqa/halo/pilot-v2-audit \
   --stage pilot --seed 0
 ```
 

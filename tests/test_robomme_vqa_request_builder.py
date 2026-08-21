@@ -244,3 +244,70 @@ def test_completed_artifact_uses_final_paths_and_verifies_after_rename(
     assert list(approved_root.iterdir()) == [output]
     # read_request_artifact re-verifies every declared path against the artifact.
     read_request_artifact(output / "requests.jsonl", output / "manifest.json")
+
+
+@pytest.mark.parametrize(
+    ("execution_start", "boundaries", "expected_candidates"),
+    [
+        # A boundary at index t yields the frame after the event, t + 1.
+        # No video-demo prefix: the timestep-0 boundary would map to timestep 1,
+        # a memory question with one earlier frame. It must be dropped.
+        (0, (0, 60, 120), (61, 121)),
+        # Video-demo prefix: the timestep-0 boundary maps to the first frame
+        # after the demo, which carries the whole demonstration as history.
+        (66, (0, 90, 150), (66, 91, 151)),
+    ],
+)
+def test_query_floor_keeps_post_demo_frames_and_drops_one_frame_history(
+    execution_start: int,
+    boundaries: tuple[int, ...],
+    expected_candidates: tuple[int, ...],
+) -> None:
+    from halo.robomme_vqa.request_builder import SourceEpisode, _query_timestep
+
+    episode = SourceEpisode(
+        task_name="BinFill",
+        suite_name="counting",
+        file_path=Path("/nonexistent.h5"),
+        episode_key="episode_0",
+        episode_id=0,
+        num_timesteps=200,
+        task_goal="goal",
+        execution_start=execution_start,
+    )
+    flags = [index in boundaries for index in range(episode.num_timesteps)]
+
+    # Vary the seed to enumerate which candidates the stable rank can reach.
+    reachable = {
+        _query_timestep(episode, flags, seed=seed, min_history=16)
+        for seed in range(200)
+    }
+    assert reachable == set(expected_candidates)
+    assert all(query >= 16 for query in reachable)
+
+
+def test_query_floor_falls_back_when_no_candidate_has_enough_history() -> None:
+    from halo.robomme_vqa.request_builder import SourceEpisode, _query_timestep
+
+    episode = SourceEpisode(
+        task_name="BinFill",
+        suite_name="counting",
+        file_path=Path("/nonexistent.h5"),
+        episode_key="episode_0",
+        episode_id=0,
+        num_timesteps=6,
+        task_goal="goal",
+        execution_start=0,
+    )
+    flags = [index == 0 for index in range(episode.num_timesteps)]
+    # A short fixture episode cannot satisfy the floor; selection must still work.
+    assert _query_timestep(episode, flags, seed=0, min_history=16) == 1
+
+
+def test_default_pilot_allocation_gives_every_task_the_same_count() -> None:
+    from halo.robomme_vqa.request_builder import _request_counts_by_task
+
+    counts = _request_counts_by_task(96)
+    assert set(counts) == set(TASKS)
+    assert set(counts.values()) == {6}
+    assert sum(counts.values()) == 96

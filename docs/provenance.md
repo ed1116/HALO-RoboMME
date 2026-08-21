@@ -41,3 +41,11 @@ Run the suite with the policy environment from the repository root:
 
 The `robomme` micromamba environment is the RoboMME simulator/benchmark
 runtime. It is deliberately separate and cannot run this suite.
+
+## Evaluation rollout budget
+
+Simulator evaluation uses **10 rollouts per task** (160 per method), not the
+official 50. This is an evaluation-time budget only: it must never influence
+training data, hyperparameters, checkpoint selection, or VQA corpus
+construction, all of which use the full 100 demonstrations per task with the
+canonical 90/10 episode split.
