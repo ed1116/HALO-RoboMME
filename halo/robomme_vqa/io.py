@@ -99,18 +99,22 @@ def request_from_dict(payload: Mapping[str, Any]) -> VQARequest:
         raise ContractError(f"invalid request: {error}") from error
 
 
+def parse_request_jsonl(text: str) -> Iterable[VQARequest]:
+    """Parse requests from already-read text, so callers can hash the same bytes."""
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            payload = strict_json_loads(line)
+        except ContractError as error:
+            raise ContractError(f"invalid JSON on line {line_number}: {error}") from error
+        if not isinstance(payload, dict):
+            raise ContractError(f"request line {line_number} must be an object")
+        yield request_from_dict(payload)
+
+
 def read_request_jsonl(path: str | Path) -> Iterable[VQARequest]:
-    with Path(path).open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                payload = strict_json_loads(line)
-            except ContractError as error:
-                raise ContractError(f"invalid JSON on line {line_number}: {error}") from error
-            if not isinstance(payload, dict):
-                raise ContractError(f"request line {line_number} must be an object")
-            yield request_from_dict(payload)
+    return parse_request_jsonl(Path(path).read_text(encoding="utf-8"))
 
 
 def write_json(path: Path, payload: Any) -> None:

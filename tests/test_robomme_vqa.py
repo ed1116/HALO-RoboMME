@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -17,6 +18,7 @@ from halo.robomme_vqa.contracts import (
     load_model_config,
     parse_candidates,
     parse_judge_result,
+    parse_record,
 )
 from halo.robomme_vqa.io import guarded_output_directory, request_from_dict
 from halo.robomme_vqa.pipeline import (
@@ -346,3 +348,94 @@ def test_request_contract_and_output_guard() -> None:
         guarded_output_directory("relative-output")
     with pytest.raises(ValueError):
         guarded_output_directory("/tmp/not-approved")
+
+
+def _valid_record() -> dict[str, Any]:
+    config = load_model_config(MODEL_CONFIG)
+    pipeline = OfflineVQAPipeline(
+        CandidateGenerator(FakeBackend([candidate_response()]), config),
+        IndependentJudge(FakeBackend([judge_response()]), config),
+        max_evidence_frames=3,
+    )
+    request = VQARequest(
+        task_name="BinFill",
+        suite_name="counting",
+        episode_id="BinFill/episode_0",
+        task_goal="place two blue cubes into the bin",
+        query_timestep=12,
+        timeline=timeline(),
+        known_counts_by_family={"event_count": 2},
+    )
+    return pipeline.process(request, candidate_count=1)[0]
+
+
+def test_record_fields_match_the_published_record_schema() -> None:
+    schema = json.loads(
+        (REPOSITORY_ROOT / "schemas/vqa/v1/record.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert contracts.RECORD_FIELDS == set(schema["required"])
+    assert contracts.DETERMINISTIC_CHECK_FIELDS == set(
+        schema["properties"]["deterministic_checks"]["required"]
+    )
+    assert parse_record(_valid_record()) == _valid_record()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        ({"accepted": "false"}, "accepted must be boolean"),
+        ({"accepted": 0}, "accepted must be boolean"),
+        ({"query_timestep": "12"}, "query_timestep"),
+        ({"query_timestep": True}, "query_timestep"),
+        ({"evidence_timestamps": [8, 4]}, "evidence_timestamps"),
+        ({"evidence_timestamps": []}, "evidence_timestamps"),
+        ({"deterministic_checks": {"identifiers_valid": "yes"}}, "fields differ"),
+        ({"source_request_sha256": "0" * 63}, "source_request_sha256"),
+        ({"source_request_sha256": "A" * 64}, "source_request_sha256"),
+        ({"suite_name": "imitation"}, "suite_name does not match"),
+        ({"episode_id": "BinFill/episode_x"}, "episode_id"),
+        ({"candidate_id": "candidate-0"}, "candidate_id"),
+        ({"question": "   "}, "question"),
+        ({"judge_result": {"evidence_timestamps": [4]}}, "fields differ"),
+        ({"judge_result": None}, "judge result must be an object"),
+        ({"rejection_reason": "made_up"}, "rejection_reason must be null"),
+        ({"schema_version": "halo.robomme.vqa.record/v2"}, "schema_version"),
+    ],
+)
+def test_record_validation_rejects_wrong_value_types(
+    mutation: Mapping[str, Any], match: str
+) -> None:
+    record = {**_valid_record(), **mutation}
+    with pytest.raises(ContractError, match=match):
+        parse_record(record)
+
+
+def test_record_validation_rejects_truthy_non_boolean_deterministic_checks() -> None:
+    record = _valid_record()
+    record["deterministic_checks"] = {**record["deterministic_checks"], "count_valid": 1}
+    with pytest.raises(ContractError, match="count_valid must be boolean"):
+        parse_record(record)
+
+
+def _audit_cli() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "audit_robomme_vqa_cli", REPOSITORY_ROOT / "scripts/vqa/audit_robomme_vqa.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_audit_cli_reads_records_from_bytes_and_rejects_truthy_strings() -> None:
+    cli = _audit_cli()
+    valid = _valid_record()
+    payload = json.dumps(valid, sort_keys=True).encode("utf-8")
+    assert cli.read_records(payload) == [valid]
+
+    rejected = json.dumps({**valid, "accepted": "false"}, sort_keys=True)
+    with pytest.raises(ValueError, match="line 2: accepted must be boolean"):
+        cli.read_records(payload + b"\n" + rejected.encode("utf-8"))
+    with pytest.raises(ValueError, match="records JSONL is empty"):
+        cli.read_records(b"")

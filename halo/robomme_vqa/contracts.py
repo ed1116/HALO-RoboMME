@@ -10,6 +10,8 @@ from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from halo.robomme.dataset import TASK_TO_SUITE
+
 
 CANDIDATE_SCHEMA_VERSION = "halo.robomme.vqa.candidates/v1"
 JUDGE_SCHEMA_VERSION = "halo.robomme.vqa.judge/v1"
@@ -21,6 +23,37 @@ APPROVED_RUNTIME_VERSIONS = {
     "torch": "2.9.1+cu128",
     "transformers": "5.15.1",
     "qwen-vl-utils": "0.0.14",
+}
+DETERMINISTIC_CHECK_FIELDS = {
+    "identifiers_valid",
+    "timestamps_valid",
+    "no_privileged_terms",
+    "count_valid",
+    "not_duplicate",
+    "answer_within_bounds",
+}
+RECORD_FIELDS = {
+    "schema_version",
+    "task_name",
+    "suite_name",
+    "episode_id",
+    "query_timestep",
+    "candidate_id",
+    "question",
+    "answer",
+    "question_family",
+    "evidence_timestamps",
+    "generator_model_revision",
+    "generator_prompt_revision",
+    "judge_model_revision",
+    "judge_prompt_revision",
+    "source_request_sha256",
+    "generator_response_sha256",
+    "judge_response_sha256",
+    "deterministic_checks",
+    "judge_result",
+    "accepted",
+    "rejection_reason",
 }
 
 
@@ -202,8 +235,9 @@ def parse_candidates(text: str) -> tuple[Candidate, ...]:
     return tuple(parsed)
 
 
-def parse_judge_result(text: str) -> JudgeResult:
-    payload = extract_json_object(text, required_key="visually_answerable")
+def judge_result_from_payload(payload: Any) -> JudgeResult:
+    if not isinstance(payload, Mapping):
+        raise ContractError("judge result must be an object")
     expected = {
         "schema_version",
         "visually_answerable",
@@ -240,6 +274,78 @@ def parse_judge_result(text: str) -> JudgeResult:
         ),
         reason_code=reason_code,
     )
+
+
+def parse_judge_result(text: str) -> JudgeResult:
+    return judge_result_from_payload(
+        extract_json_object(text, required_key="visually_answerable")
+    )
+
+
+def parse_record(payload: Any) -> dict[str, Any]:
+    """Validate a corpus record's value types, not only its field names."""
+    if not isinstance(payload, Mapping):
+        raise ContractError("record must be an object")
+    _exact_keys(payload, RECORD_FIELDS, "record")
+    if payload["schema_version"] != RECORD_SCHEMA_VERSION:
+        raise ContractError("unsupported record schema_version")
+
+    task_name = _nonempty_string(payload["task_name"], "task_name", maximum=64)
+    if TASK_TO_SUITE.get(task_name) != payload["suite_name"]:
+        raise ContractError("suite_name does not match task_name")
+    episode_id = _nonempty_string(payload["episode_id"], "episode_id", maximum=128)
+    prefix = f"{task_name}/episode_"
+    if not episode_id.startswith(prefix) or not episode_id[len(prefix) :].isdigit():
+        raise ContractError("episode_id must use TaskName/episode_N")
+    query_timestep = payload["query_timestep"]
+    if (
+        isinstance(query_timestep, bool)
+        or not isinstance(query_timestep, int)
+        or query_timestep < 0
+    ):
+        raise ContractError("query_timestep must be a non-negative integer")
+
+    candidate_id = _nonempty_string(payload["candidate_id"], "candidate_id", maximum=32)
+    if re.fullmatch(r"candidate-[1-9][0-9]*", candidate_id) is None:
+        raise ContractError("candidate_id must be candidate-N")
+    _nonempty_string(payload["question"], "question", maximum=512)
+    _nonempty_string(payload["answer"], "answer", maximum=128)
+    _nonempty_string(payload["question_family"], "question_family", maximum=64)
+    _timestamps(payload["evidence_timestamps"], "record evidence_timestamps")
+    for field in (
+        "generator_model_revision",
+        "generator_prompt_revision",
+        "judge_model_revision",
+        "judge_prompt_revision",
+    ):
+        _nonempty_string(payload[field], field, maximum=128)
+    for field in (
+        "source_request_sha256",
+        "generator_response_sha256",
+        "judge_response_sha256",
+    ):
+        value = payload[field]
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ContractError(f"{field} must be a lower-case SHA-256")
+
+    checks = payload["deterministic_checks"]
+    if not isinstance(checks, Mapping):
+        raise ContractError("deterministic_checks must be an object")
+    _exact_keys(checks, DETERMINISTIC_CHECK_FIELDS, "deterministic_checks")
+    for field, value in checks.items():
+        if not isinstance(value, bool):
+            raise ContractError(f"deterministic_checks.{field} must be boolean")
+    judge_result_from_payload(payload["judge_result"])
+
+    accepted = payload["accepted"]
+    if not isinstance(accepted, bool):
+        raise ContractError("accepted must be boolean")
+    reason = payload["rejection_reason"]
+    if reason is not None:
+        _nonempty_string(reason, "rejection_reason", maximum=128)
+    if accepted != (reason is None):
+        raise ContractError("rejection_reason must be null exactly when accepted is true")
+    return dict(payload)
 
 
 @dataclass(frozen=True)
