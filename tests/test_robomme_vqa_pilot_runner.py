@@ -153,3 +153,21 @@ def test_per_task_selection_covers_every_task_instead_of_a_prefix() -> None:
     assert {r.task_name for _, r in two_each} == {"BinFill", "PickXtimes", "StopCube"}
     # Deterministic, so a resumed run selects exactly the same requests.
     assert runner.select_requests(artifact, per_task=2) == two_each
+
+
+def test_two_gpu_shards_are_disjoint_and_together_cover_the_artifact() -> None:
+    runner = _runner()
+    tasks = [t for t in ("BinFill", "PickXtimes", "StopCube") for _ in range(6)]
+    artifact = _StubArtifact(tasks)
+
+    gate = runner.select_requests(artifact, per_task=1, per_task_offset=0)
+    rest = runner.select_requests(artifact, per_task=0, per_task_offset=1)
+
+    assert len(gate) == 3 and len(rest) == 15
+    gate_hashes = {h for h, _ in gate}
+    rest_hashes = {h for h, _ in rest}
+    assert not gate_hashes & rest_hashes
+    assert gate_hashes | rest_hashes == set(artifact.requests)
+    # Every task keeps a presence in both shards.
+    assert {r.task_name for _, r in gate} == {"BinFill", "PickXtimes", "StopCube"}
+    assert {r.task_name for _, r in rest} == {"BinFill", "PickXtimes", "StopCube"}

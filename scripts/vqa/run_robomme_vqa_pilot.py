@@ -40,6 +40,12 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Take only the first N requests of each task, for a stratified gate run.",
     )
+    parser.add_argument(
+        "--per-task-offset",
+        type=int,
+        default=0,
+        help="Skip the first N requests of each task, so shards on separate GPUs stay disjoint.",
+    )
     parser.add_argument("--candidate-count", type=int, default=3)
     parser.add_argument("--max-evidence-frames", type=int, default=16)
     parser.add_argument("--device", default="cuda")
@@ -126,21 +132,30 @@ def recover_completed_work(
     return kept, progress
 
 
-def select_requests(artifact: Any, *, per_task: int) -> list[tuple[str, Any]]:
-    """Order requests deterministically, optionally capped per task.
+def select_requests(
+    artifact: Any, *, per_task: int, per_task_offset: int = 0
+) -> list[tuple[str, Any]]:
+    """Order requests deterministically, optionally windowed per task.
 
     The artifact groups requests by task, so a plain prefix would cover only the
-    first task or two. A per-task cap gives a gate run every task and suite.
+    first task or two. A per-task window gives a gate run every task and suite,
+    and lets two GPUs take disjoint shards of the same artifact: offset 0 with
+    count 1, then offset 1 with the remainder.
     """
+    if per_task_offset < 0:
+        raise ValueError("--per-task-offset must not be negative")
     ordered = list(artifact.requests.items())
-    if per_task <= 0:
+    if per_task <= 0 and per_task_offset == 0:
         return ordered
-    taken: Counter[str] = Counter()
+    seen: Counter[str] = Counter()
     selected: list[tuple[str, Any]] = []
     for source_hash, request in ordered:
-        if taken[request.task_name] >= per_task:
+        position = seen[request.task_name]
+        seen[request.task_name] += 1
+        if position < per_task_offset:
             continue
-        taken[request.task_name] += 1
+        if per_task > 0 and position >= per_task_offset + per_task:
+            continue
         selected.append((source_hash, request))
     return selected
 
@@ -183,7 +198,9 @@ def main() -> None:
         max_evidence_frames=args.max_evidence_frames,
     )
 
-    selected = select_requests(artifact, per_task=args.per_task)[: args.max_requests]
+    selected = select_requests(
+        artifact, per_task=args.per_task, per_task_offset=args.per_task_offset
+    )[: args.max_requests]
     start_time = time.perf_counter()
     for request_index, (source_hash, request) in enumerate(selected):
         if source_hash in attempted:
@@ -259,6 +276,7 @@ def main() -> None:
         "max_evidence_frames": args.max_evidence_frames,
         "max_requests": args.max_requests,
         "per_task": args.per_task,
+        "per_task_offset": args.per_task_offset,
         "selected_requests": len(selected),
         "resumed": args.resume,
         "elapsed_seconds": elapsed_seconds,
